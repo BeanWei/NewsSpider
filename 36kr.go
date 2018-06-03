@@ -1,60 +1,76 @@
 package main
 
 import (
-	"regexp"
+	"encoding/json"
 	"fmt"
-	"strings"
 	"log"
+	"regexp"
+	"strings"
 
 	"github.com/gocolly/colly"
 )
 
-/*定义新闻的结构*/
+// NewsStruct 定义新闻的结构
 type NewsStruct struct {
-	Srcurl      string
-	Title       string
-	Coverlink   string
-	Author      []NewsAutor
-	Publishtime string
-	Content     string
+	Srcurl             string
+	Title              string
+	Coverlink          string
+	AuthorName         string
+	AuthorAvatar       string
+	AuthorIntroduction string
+	Publishtime        string
+	Content            string
 }
 
-/*定义作者的结构*/
-type NewsAutor struct {
-	Name				string
-	Avatar				string
-	Introduction		string
+// OneNews 爬取的每条news结构
+type OneNews struct {
+	Srcurl      string   `json:"id"`
+	Title       string   `json:"title"`
+	Coverlink   string   `json:"avatar_url"`
+	Author      []Author `json:"user"`
+	Publishtime string   `json:"published_at"`
+	Content     string   `json:"content"`
+}
+
+// Author 爬取的每条news中的作者信息
+type Author struct {
+	Name         string `json:"name"`
+	Avatar       string `json:"avatar_url"`
+	Introduction string `json:"introduction"`
 }
 
 //定义channel
 var (
-	chan_newslist chan string		//负责传输所有的焦点新闻链接
-	chan_ok chan string 			//负责收集焦点新闻爬取状态
+	chanNewslist chan string //负责传输所有的焦点新闻链接
+	chanOk       chan string //负责收集焦点新闻爬取状态
 )
 
 // func news_36kr() {
 
 // }
 
-
 func main() {
 	html, err := html("http://36kr.com/")
 	if err != nil {
 		log.Fatalln("无法获取文章页面")
 	}
-	hot_news_list := strings.Split(strings.Split(html, `"hotPosts|hotPost":`)[1], `,"highProjects|focus":`)[0]
-	chan_newslist := make(chan string, 10)
-	for _, v := range hot_news_list {
-		chan_newslist <- v
+	hotNewsList := strings.Split(strings.Split(html, `"hotPosts|hotPost":`)[1], `,"highProjects|focus":`)[0]
+	channewslist := make(chan string, 10)
+	//string转成[]map[string]interface{}
+	var dat []map[string]interface{}
+	if err := json.Unmarshal([]byte(hotNewsList), &dat); err != nil {
+		log.Fatalln("无法序列化数据")
 	}
-	chan_ok := make(chan string, 10)
-	for onenews := range chan_newslist {
+	for _, v := range dat {
+		chanNewslist <- v
+	}
+	chanOk := make(chan string, 10)
+	for onenews := range chanNewslist {
 		go newsdetail(onenews)
-		<-chan_ok
+		<-chanOk
 	}
 
 }
-
 
 //html 爬取页面通用函数
 func html(url string) (html string, err error) {
@@ -80,23 +96,31 @@ func html(url string) (html string, err error) {
 }
 
 //newsdetail 获取文章详情
-func newsdetail(onenews string) (news *NewsStruct, err error) {
-	// news := make(*NewsStruct, 6)
-	// author := make(*NewsAutor, 1)
-	author := NewsAutor{}
-	news.Srcurl := fmt.Sprintf("http://36kr.com/p/%s.html", onenews["id"])
-	news.Title = onenews["title"]	
-	news.Coverlink = onenews["cover"]
-	author.Name = onenews["user"]["name"]
-	author.Avatar = onenews["user"]["avatar_url"]
-	author.Introduction = onenews["user"]["introduction"]
-	news.Publishtime = onenews["published_at"]
-	news.Content, err := newscontent(news.Srcurl)
+func newsdetail(onenews *OneNews) (news []NewsStruct, err error) {
+	srcurl := fmt.Sprintf("http://36kr.com/p/%s.html", onenews["id"])
+	title := onenews["title"]
+	cover := onenews["cover"]
+	authorname := onenews["user"]["name"]
+	authoravatar := onenews["user"]["avatar_url"]
+	authorintroduction := onenews["user"]["introduction"]
+	publishtime := onenews["published_at"]
+	content, err := newscontent(srcurl)
 	if err != nil {
 		log.Fatalln("文章内容解析失败")
 		return nil, err
 	}
-	fmt.Println("news")
+	n := NewsStruct{
+		Srcurl:             srcurl,
+		Title:              title,
+		Coverlink:          cover,
+		AuthorName:         authorname,
+		AuthorAvatar:       authoravatar,
+		AuthorIntroduction: authorintroduction,
+		Publishtime:        publishtime,
+		Content:            content,
+	}
+	news = append(news, n)
+	fmt.Println(news)
 	return
 }
 
@@ -105,11 +129,9 @@ func newscontent(url string) (content string, err error) {
 	newshtml, err := html(url)
 	if err != nil {
 		log.Fatalln("无法获取文章页面")
-		return nil, err 
+		panic(err)
 	}
 	reg := regexp.MustCompile(`"content":(.*?),"cover"`)
-	content = reg.FindAllString(newshtml)
+	content = reg.FindString(newshtml)
 	return
 }
-
-
