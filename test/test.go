@@ -9,6 +9,8 @@ import (
 	"time"
 
 	"github.com/gocolly/colly"
+	"github.com/gocolly/colly/extensions"
+	"github.com/PuerkitoBio/goquery"
 )
 
 // NewsStruct 定义新闻的结构
@@ -37,66 +39,64 @@ type News []struct {
 	Content     string `json:"content"`
 }
 
+// PostData 请求数据
+type PostData struct {
+	Code	string
+	Page	int
+	Time	int64
+}
+
+// PostResult 请求返回数据
+type PostResult struct {
+	Data		string 		`json:"data"`
+	Dateline	string		`json:"last_dateline"`
+	Msg			string		`json:"msg"`
+	Result		int			`json:"result"`
+	TotalPage	int			`json:"total_page"`
+}
+
 func main() {
 
 	allnews := []NewsStruct{}
 
-	c := colly.NewCollector()
+	c := colly.NewCollector(
+		colly.Async(true),
+	)
+	extensions.RandomUserAgent(c)
+	extensions.Referrer(c)
 	//设置请求超时
 	c.SetRequestTimeout(200 * time.Second)
 	c.UserAgent = "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/63.0.3239.108 Safari/537.36"
-	c.OnRequest(func(r *colly.Request) {
-		r.Headers.Set("Host", "36kr.com")
-		r.Headers.Set("Referer", "http://36kr.com/")
-		r.Headers.Set("X-Tingyun-Id", "Dio1ZtdC5G4;r=996634586")
-		log.Println("Visiting: ", r.URL.String())
+	for page := 1; page <= 10; page++ {
+		dateline := time.Now().Unix()
+		err := c.Post("https://www.huxiu.com/v2_action/article_list", 
+			map[string]PostData{
+				"huxiu_hash_code": "dc6ad039c0702be4185b5918168c08c3",
+				"page": page,
+				"last_dateline": dateline
+			})
+		if err != nil {
+			log.Fatalf(err)
+		}
+	}
+	
+	c.OnResponse(func(resp *colly.Response) {
+		postresult := &PostResult{}
+		if err := json.Unmarshal([]byte(resp.Body), postresult); err != nil {
+			log.Fatalf(err)
+		}
+		newsdata := postresult.Data
+		doc, err := goquery.NewDocumentFromReader(newsdata)
+		if err != nil {
+			log.Fatalf(err)
+		}
+		//TODO:根据test.md解析出news信息，然后进一步爬取
 	})
+		
 	c.OnError(func(r *colly.Response, err error) {
 		log.Println("Request URL:", r.Request.URL, "failed with response:", r, "\nError:", err)
 		r.Request.Retry()
 	})
 
-	detailCollector := c.Clone()
-	detailCollector.OnHTML("html", func(e *colly.HTMLElement) {
-
-		reg := regexp.MustCompile(`"content":(.*?),"cover"`)
-		content := reg.FindString(string(e.Text))
-
-		newsdetail := NewsStruct{}
-		newsdetail.Srcurl = e.Request.URL.String()
-		newsdetail.Title = e.Request.Ctx.Get("title")
-		newsdetail.Coverlink = e.Request.Ctx.Get("coverlink")
-		newsdetail.AuthorName = e.Request.Ctx.Get("authorname")
-		newsdetail.AuthorAvatar = e.Request.Ctx.Get("authoravatar")
-		newsdetail.AuthorIntroduction = e.Request.Ctx.Get("authorintroduction")
-		newsdetail.Publishtime = e.Request.Ctx.Get("publishtime")
-		newsdetail.Content = content
-		allnews = append(allnews, newsdetail)
-
-		fmt.Println(len(allnews))
-	})
-
-	c.OnResponse(func(resp *colly.Response) {
-		html := string(resp.Body)
-		homepage := strings.Split(strings.Split(html, `"hotPosts|hotPost":`)[1], `,"highProjects|focus":`)[0]
-		hotNewsList := &News{}
-		if err := json.Unmarshal([]byte(homepage), hotNewsList); err != nil {
-			log.Fatal(err)
-		}
-		for _, onenews := range *hotNewsList {
-			id := onenews.ID
-			url := fmt.Sprintf("http://36kr.com/p/%s.html", id)
-			ctx := colly.NewContext()
-			ctx.Put("title", onenews.Title)
-			ctx.Put("coverlink", onenews.Coverlink)
-			ctx.Put("authorname", onenews.Author.Name)
-			ctx.Put("authoravatar", onenews.Author.Avatar)
-			ctx.Put("authorintroduction", onenews.Author.Introduction)
-			ctx.Put("publishtime", onenews.Publishtime)
-			detailCollector.Request("GET", url, nil, ctx, nil)
-			log.Println("Visiting: ", url)
-		}
-	})
-
-	c.Visit("http://36kr.com/")
+	
 }
