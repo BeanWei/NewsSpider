@@ -38,6 +38,9 @@ type News []struct {
 }
 
 func main() {
+
+	allnews := []NewsStruct{}
+
 	c := colly.NewCollector()
 	//设置请求超时
 	c.SetRequestTimeout(200 * time.Second)
@@ -53,6 +56,26 @@ func main() {
 		r.Request.Retry()
 	})
 
+	detailCollector := c.Clone()
+	detailCollector.OnHTML("html", func(e *colly.HTMLElement) {
+
+		reg := regexp.MustCompile(`"content":(.*?),"cover"`)
+		content := reg.FindString(string(e.Text))
+
+		newsdetail := NewsStruct{}
+		newsdetail.Srcurl = e.Request.URL.String()
+		newsdetail.Title = e.Request.Ctx.Get("title")
+		newsdetail.Coverlink = e.Request.Ctx.Get("coverlink")
+		newsdetail.AuthorName = e.Request.Ctx.Get("authorname")
+		newsdetail.AuthorAvatar = e.Request.Ctx.Get("authoravatar")
+		newsdetail.AuthorIntroduction = e.Request.Ctx.Get("authorintroduction")
+		newsdetail.Publishtime = e.Request.Ctx.Get("publishtime")
+		newsdetail.Content = content
+		allnews = append(allnews, newsdetail)
+
+		fmt.Println(len(allnews))
+	})
+
 	c.OnResponse(func(resp *colly.Response) {
 		html := string(resp.Body)
 		homepage := strings.Split(strings.Split(html, `"hotPosts|hotPost":`)[1], `,"highProjects|focus":`)[0]
@@ -60,30 +83,19 @@ func main() {
 		if err := json.Unmarshal([]byte(homepage), hotNewsList); err != nil {
 			log.Fatal(err)
 		}
-		allnews := []NewsStruct{}
 		for _, onenews := range *hotNewsList {
-			news := NewsStruct{}
 			id := onenews.ID
-			news.Srcurl = fmt.Sprintf("http://36kr.com/p/%s.html", id)
-			news.Title = onenews.Title
-			news.Coverlink = onenews.Coverlink
-			news.AuthorName = onenews.Author.Name
-			news.AuthorAvatar = onenews.Author.Avatar
-			news.AuthorIntroduction = onenews.Author.Introduction
-			news.Publishtime = onenews.Publishtime
-			//news.Content = ""
+			url := fmt.Sprintf("http://36kr.com/p/%s.html", id)
+			ctx := colly.NewContext()
+			ctx.Put("title", onenews.Title)
+			ctx.Put("coverlink", onenews.Coverlink)
+			ctx.Put("authorname", onenews.Author.Name)
+			ctx.Put("authoravatar", onenews.Author.Avatar)
+			ctx.Put("authorintroduction", onenews.Author.Introduction)
+			ctx.Put("publishtime", onenews.Publishtime)
+			detailCollector.Request("GET", url, nil, ctx, nil)
+			log.Println("Visiting: ", url)
 		}
-		d := c.Clone()
-		d.OnResponse(func(r *colly.Response) {
-			reg := regexp.MustCompile(`"content":(.*?),"cover"`)
-			content := reg.FindString(string(r.Body))
-			log.Println(content)
-		})
-		for _, v := range allnews {
-			//v.Content = content
-			d.Visit(v.Srcurl)
-		}
-		// d.Wait()
 	})
 
 	c.Visit("http://36kr.com/")
