@@ -1,4 +1,4 @@
-package main
+package news
 
 import (
 	"encoding/json"
@@ -37,53 +37,14 @@ type News []struct {
 	Content     string `json:"content"`
 }
 
-//定义channel
-// var (
-// 	chanNewslist chan string //负责传输所有的焦点新闻链接
-// 	chanOk       chan string //负责收集焦点新闻爬取状态
-// )
+// newsOf36kr 爬取36kr新闻焦点入口函数
+func newsOf36kr() {
 
-// func news_36kr() {
-
-// }
-
-func main() {
-	html, err := html("http://36kr.com/")
-	if err != nil {
-		log.Fatal(err)
-	}
-	homepage := strings.Split(strings.Split(html, `"hotPosts|hotPost":`)[1], `,"highProjects|focus":`)[0]
-	hotNewsList := &News{}
-	//string转成[]map[string]interface{}
-	//var dat []map[string]interface{}
-	if err := json.Unmarshal([]byte(homepage), hotNewsList); err != nil {
-		log.Fatal(err)
-	}
 	allnews := []NewsStruct{}
-	for _, onenews := range *hotNewsList {
-		news := NewsStruct{}
-		id := onenews.ID
-		news.Srcurl = fmt.Sprintf("http://36kr.com/p/%s.html", id)
-		news.Title = onenews.Title
-		news.Coverlink = onenews.Coverlink
-		news.AuthorName = onenews.Author.Name
-		news.AuthorAvatar = onenews.Author.Avatar
-		news.AuthorIntroduction = onenews.Author.Introduction
-		news.Publishtime = onenews.Publishtime
-		news.Content, err = newsdetail(id)
-		if err != nil {
-			log.Fatal(err)
-			continue
-		}
-		allnews = append(allnews, news)
-	}
-	fmt.Println(allnews)
 
-}
-
-//html 爬取页面通用函数
-func html(url string) (html string, err error) {
-	c := colly.NewCollector()
+	c := colly.NewCollector(
+		colly.Async(true),
+	)
 	//设置请求超时
 	c.SetRequestTimeout(200 * time.Second)
 	c.UserAgent = "Mozilla/5.0 (Windows NT 10.0; WOW64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/63.0.3239.108 Safari/537.36"
@@ -91,27 +52,55 @@ func html(url string) (html string, err error) {
 		r.Headers.Set("Host", "36kr.com")
 		r.Headers.Set("Referer", "http://36kr.com/")
 		r.Headers.Set("X-Tingyun-Id", "Dio1ZtdC5G4;r=996634586")
+		log.Println("Visiting: ", r.URL.String())
 	})
+	c.OnError(func(r *colly.Response, err error) {
+		log.Println("Request URL:", r.Request.URL, "failed with response:", r, "\nError:", err)
+		r.Request.Retry()
+	})
+
+	detailCollector := c.Clone()
+	detailCollector.OnHTML("html", func(e *colly.HTMLElement) {
+
+		reg := regexp.MustCompile(`"content":(.*?),"cover"`)
+		content := reg.FindString(string(e.Text))
+
+		newsdetail := NewsStruct{}
+		newsdetail.Srcurl = e.Request.URL.String()
+		newsdetail.Title = e.Request.Ctx.Get("title")
+		newsdetail.Coverlink = e.Request.Ctx.Get("coverlink")
+		newsdetail.AuthorName = e.Request.Ctx.Get("authorname")
+		newsdetail.AuthorAvatar = e.Request.Ctx.Get("authoravatar")
+		newsdetail.AuthorIntroduction = e.Request.Ctx.Get("authorintroduction")
+		newsdetail.Publishtime = e.Request.Ctx.Get("publishtime")
+		newsdetail.Content = content
+		allnews = append(allnews, newsdetail)
+
+	})
+
 	c.OnResponse(func(resp *colly.Response) {
-		html = string(resp.Body)
+		html := string(resp.Body)
+		homepage := strings.Split(strings.Split(html, `"hotPosts|hotPost":`)[1], `,"highProjects|focus":`)[0]
+		hotNewsList := &News{}
+		if err := json.Unmarshal([]byte(homepage), hotNewsList); err != nil {
+			log.Fatal(err)
+		}
+		for _, onenews := range *hotNewsList {
+			id := onenews.ID
+			url := fmt.Sprintf("http://36kr.com/p/%s.html", id)
+			ctx := colly.NewContext()
+			ctx.Put("title", onenews.Title)
+			ctx.Put("coverlink", onenews.Coverlink)
+			ctx.Put("authorname", onenews.Author.Name)
+			ctx.Put("authoravatar", onenews.Author.Avatar)
+			ctx.Put("authorintroduction", onenews.Author.Introduction)
+			ctx.Put("publishtime", onenews.Publishtime)
+			detailCollector.Request("GET", url, nil, ctx, nil)
+			log.Println("Visiting: ", url)
+		}
 	})
 
-	c.OnError(func(resp *colly.Response, errHttp error) {
-		err = errHttp
-	})
-	err = c.Visit(url)
-	return
-}
+	c.Visit("http://36kr.com/")
 
-//newsdetail 获取文章正文详情
-func newsdetail(id string) (content string, err error) {
-	srcurl := fmt.Sprintf("http://36kr.com/p/%s.html", id)
-	newshtml, err := html(srcurl)
-	if err != nil {
-		log.Fatal(err)
-	}
-	reg := regexp.MustCompile(`"content":(.*?),"cover"`)
-	content = reg.FindString(newshtml)
-	fmt.Println(content)
-	return
+	detailCollector.Wait()
 }
